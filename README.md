@@ -7,3 +7,5 @@ This repo has the following files:
 2. The prediction of severity model
 3. The univariate analysis of duration of symptoms
 4. The correlation network visualization
+
+Thanks for looking at my beautiful code!
