@@ -1,0 +1,100 @@
+---
+title: "MGH"
+output: html_notebook
+---
+
+Libraries
+```{r message=FALSE, warning=FALSE}
+library(readxl)
+library(dplyr)
+library(reshape2)
+library(glmnet)
+library(caret)
+library(RColorBrewer)
+```
+
+Computation of the proteomic model on the training dataset
+```{r message=FALSE, warning=FALSE}
+### Features
+MyData = read_xlsx("~/Desktop/GaudilliereLab/03 - COVID Kari/20201029_Gaudilliere_NPX_2020-07-20_.xlsx")
+Samples = read_xlsx("~/Desktop/GaudilliereLab/03 - COVID Kari/20201029_Sample Manifest_corrected.xlsx")
+data <- MyData %>% dplyr::mutate(ID = SampleID) %>% dplyr::select(ID ,UniProt, Assay, NPX)  %>%
+  dcast(ID~Assay,fun.aggregate = mean)
+data = data[-c(54),]
+
+### Labels
+y = Samples$`Additional information`[1:88] != "Control"
+y_ = Samples$`Additional information`[1:88]
+y__ = as.numeric(as.factor(y_))
+data= data[,]
+
+### Cohort information
+cohort = read_xlsx("~/Desktop/GaudilliereLab/03 - COVID Kari/Olink_CyTOFcohort.xlsx")
+
+filter_cohort = function(name){
+  if(sum(cohort$`Specimen/ID` == name) == 0){
+    return(F)
+  }
+  return(cohort$CyTOFcohort[which(cohort$`Specimen/ID` == name)] == "2" | cohort$CyTOFcohort[which(cohort$`Specimen/ID` == name)] == "3")
+}
+
+ybis = cohort$Duration_symptoms
+
+l_cohort = unlist(sapply(data$ID, filter_cohort))
+
+### Test-train split
+training = data[l_cohort,-c(1)]
+test = data[!l_cohort, -c(1)]
+ytest = y__[!l_cohort]
+ytrain = y__[l_cohort]
+
+
+### Model fitting
+glmGrid <-  expand.grid(alpha = c(1), 
+                          lambda = seq(0,1,0.001))
+mod.Prot = train(y = ytrain, x = training , method = "glmnet", family = "gaussian",
+                  trControl = trainControl(method="LOOCV"), 
+                  tuneGrid = glmGrid, preProcess = c("medianImpute","nzv"))
+```
+
+Predicting Severity on the MGH dataset
+```{r}
+### Preprocessing of the results
+MGH = read.csv("~/Desktop/GaudilliereLab/03 - COVID Kari/Olink_MGH.csv") %>% dplyr::mutate(ID = SampleID) %>% dplyr::select(ID, UniProt, Assay, NPX, WHO.0) %>% reshape2::dcast(ID+WHO.0~Assay,fun.aggregate = mean, value.var = c("NPX"))
+
+MGH_labels = MGH$WHO.0
+
+
+### Imputation of the median for the missing proteins
+for (col in colnames(data)){
+  if(!col %in% colnames(MGH)){
+    MGH[,col] = rep(median(data[,col]), nrow(MGH))
+  }
+}
+
+### Prediction using our model
+MGH_ordered = MGH[,colnames(data)]
+preds = predict(mod.Prot, MGH_ordered)
+
+df = data.frame(WHO.0 = MGH_labels, pred_outcomes = preds)
+```
+
+Plot of the results
+```{r}
+ggplot(df, aes(x = WHO.0, y= pred_outcomes, group = WHO.0, col = WHO.0)) + geom_boxplot() + geom_jitter(width = 0.25) + theme_classic(
+) + ylab("Model predictions") + xlab("WHO scale") + scale_x_reverse()
+```
+
+Plot of the multi-ROC curves
+```{r}
+roc.multi = multiclass.roc(predictor = as.numeric(df$pred_outcomes[df$WHO.0!=1]), response = as.numeric(df$WHO.0[df$WHO.0!=1]), partial.auc = c(0,1))
+rs <- roc.multi[['rocs']]
+mat_colors <- brewer.pal(6, "Set1")
+plot.roc(rs[[1]], col = mat_colors[1])
+sapply(2:length(rs),function(i) lines.roc(rs[[i]],col=mat_colors[i]))
+legend("bottomright", 
+       legend = c("2vs4", "2vs5","2vs6", "4vs5", "4vs6", "5vs6"), 
+       fill = mat_colors
+       )
+roc.multi
+```
