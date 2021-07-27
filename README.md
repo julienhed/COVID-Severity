@@ -7,5 +7,4 @@ This repo has the following files:
 2. The prediction of severity model
 3. The univariate analysis of duration of symptoms
 4. The correlation network visualization
-
-Thanks!
+5. Evaluation of the model on the MGH dataset
