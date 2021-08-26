@@ -1,0 +1,99 @@
+---
+title: "CorrelationNetworkOmic"
+output: html_notebook
+---
+
+
+
+```{r}
+install.packages("GGally")
+library(GGally)
+devtools::install_github("briatte/ggnet")
+library(ggnet)
+library(network)
+library(sna)
+library(ggplot2)
+library(igraph)
+```
+
+Load the data from the CyTOF project for the COVID study
+```{r}
+X = rbind(protDOS[!(Group=="NA"),], protPOD[fil,])
+cor = cor(X[,-c(1)], use = "complete.obs")
+cor[cor<.9] = 0
+network <- graph_from_adjacency_matrix( cor, weighted=T, mode="undirected", diag=F)
+```
+
+Get pvalues
+```{r warning=FALSE}
+#X = data_wide.df.d0[-c(1,2)]
+severity = Group[!(Group=="NA")]
+prepro = preProcess(X, method = "medianImpute")
+X = predict(prepro, X)
+wil_p = function(x){
+  c_ = t.test(x~severity)
+  return(c_$p.value)
+}
+
+est_p = function(x){
+  c_ = log2(x[severity=="YES"]) - log2(x[severity=="NO"])
+  return(c_)
+}
+
+pval = -log10(sapply(X = X[42:8,], FUN = wil_p))
+
+esti = scale(sapply(X = X[42:82,], FUN = est_p))
+esti[is.na(esti)] = 0
+```
+
+```{r}
+library("RColorBrewer")
+pal <- scales::gradient_n_pal(colours = c("#2DA8D8FF","#F0E1B9FF","#D9514EFF"),values= c(min(sigmoid(esti)), 0, max(sigmoid(esti))))
+vec_col <- pal(sigmoid(esti))
+set.seed(2020)
+library(RColorBrewer)
+library(viridis)
+#coul  <- brewer.pal(5, "Set") 
+#my_color <- coul[as.factor(cols)]
+#pdf("CorrelationNetworkProt_scale.pdf", 
+     #width=5, height=5)
+    #units='in',res=300)
+plot(network, 
+    vertex.size=10*pval,
+    vertex.label.cex=0.3,
+    vertex.color = vec_col,
+    vertex.label=ifelse(pval >=1,colnames(X), NA),
+    vertex.label.color="black",
+    vertex.frame.color="transparent", 
+    edge.width = 0.05 * unlist(edge_attr(network)),
+    layout = as.matrix(tsne_plot), legend = T
+    )
+col=pal(seq(min(esti),max(esti),0.01))
+#legend('topleft',col = col, legend = esti, fill = T)
+legend('topleft',legend=c(1.0,2.6 6.9),pt.cex=c(2,4,6),col='black',
+            pch=21, pt.bg='white')
+```
+
+```{r}
+library(Rtsne)
+library(caret)
+X_all = X
+d <- preProcess(X_all, "medianImpute")
+X_all <- predict(d, X_all)
+set.seed(2021)
+tsne = Rtsne(t(X_all), dims = 2, verbose=TRUE, check_duplicates = F)
+tsne_plot <- data.frame(x = tsne$Y[,1], y = tsne$Y[,2])
+ggplot(tsne_plot) + geom_point(aes(x=x, y=y))  + theme_classic()
+#plot(tsne$Y, col = "black", bg= as.factor(cols), pch = 21, cex = 1.5)
+```
+
+```{r}
+library(dplyr)
+X_ = X.
+d <- preProcess(X_, "medianImpute")
+X_ <- predict(d, X_)
+tsne = Rtsne((X_), dims = 2, verbose=TRUE, max_iter = 1000, check_duplicates = FALSE)
+tsne_plot <- data.frame(x = tsne$Y[,1], y = tsne$Y[,2])
+ggplot(tsne_plot) + geom_point(aes(x=x, y=y, color=as.factor(labels1$group))) + theme_classic()
+```
+

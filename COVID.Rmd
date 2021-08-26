@@ -1,0 +1,422 @@
+---
+title: "COVID"
+output: html_notebook
+---
+
+Libraries loading
+
+```{r}
+library(tidyverse)
+library(ggpubr)
+library(ggplot2)
+library(dbplyr)
+library(readxl)
+```
+
+Features and separation into cohorts
+
+```{r}
+DOS1 = rbind(read.csv("~/Desktop/GaudilliereLab/03 - COVID Kari/083120_COVID_StanfordPBMC_cohort2_preprocessed.csv"),
+            read.csv("~/Desktop/GaudilliereLab/03 - COVID Kari/083120_COVID_StanfordPBMC_cohort3_preprocessed.csv"),
+            read.csv("~/Desktop/GaudilliereLab/03 - COVID Kari/083120_COVID_StanfordPBMC_cohort1_preprocessed.csv"))
+DOS2 = read.csv("~/Desktop/GaudilliereLab/03 - COVID Kari/083120_COVID_StanfordPBMC_cohort1_preprocessed.csv")
+data_DOS1 <- DOS1 %>% select(sampleID, population, reagent, feature, stimulation) %>% arrange(sampleID) %>%
+  pivot_wider(names_from=sampleID, values_from=feature, values_fn = mean)  
+data_DOS2 <- DOS2 %>% select(sampleID, population, reagent, feature, stimulation) %>% arrange(sampleID) %>%
+  pivot_wider(names_from=sampleID, values_from=feature) 
+
+DOS_final1 = data_DOS1 %>% unite(feature,population,reagent,stimulation, sep = "/")
+DOS_final2 = data_DOS2 %>% unite(feature,population,reagent,stimulation, sep = "/")
+labels1 = DOS1 %>% distinct(group, sampleID) %>% arrange(sampleID)
+labels2 = DOS2 %>% distinct(group, sampleID) %>% arrange(sampleID)
+y = as.numeric(as.factor(labels1$group))#[labels1$group!="Control"]
+```
+
+Import penalization matrix
+
+```{r}
+CPen.Unstim = read_excel("~/Desktop/GaudilliereLab/03 - COVID Kari/Penalization matrix.xlsx", sheet = "Unstim")
+CPen.LPSCI = read_excel("~/Desktop/GaudilliereLab/03 - COVID Kari/Penalization matrix.xlsx", sheet = "LPSCL")
+CPen.IFNIL = read_excel("~/Desktop/GaudilliereLab/03 - COVID Kari/Penalization matrix.xlsx", sheet = "IFNIL")
+CPen.PI = read_excel("~/Desktop/GaudilliereLab/03 - COVID Kari/Penalization matrix.xlsx", sheet = "PI")
+```
+
+```{r}
+labels_days = read.csv("~/Desktop/GaudilliereLab/03 - COVID Kari/COVID_Clinical_Days.csv")
+labels1$days = labels_days$Duration_symptoms
+```
+
+
+```{r}
+fil_training = sapply(labels1$sampleID,filter_ID)
+```
+
+```{r}
+X = data.frame(t(DOS_final1[-c(1)]))[labels1$group!="Control",]
+colnames(X) = DOS_final1$feature
+```
+
+
+
+```{r}
+X_ = read.csv("~/Desktop/GaudilliereLab/03 - COVID Kari/")[labels1$group!="Control",-c(1)]
+```
+
+```{r}
+Xtrain = data.frame(X[!fil,])
+Xtest = data.frame(X[fil,])
+ytrain = labels1$days[!fil]
+ytest = labels1$group[fil]
+glmGrid <-  expand.grid(alpha = c(1), 
+                          lambda = seq(0.0,1,0.001))
+glmMod <- train(y = y__[!is.na(y__)], x = data[!is.na(y__),2:length(colnames(data))] , method = "glmnet", family = "gaussian",
+                  trControl = trainControl(method="LOOCV"), 
+                  tuneGrid = glmGrid, preProcess = c("medianImpute","nzv"))
+```
+
+```{r}
+preds = predict(glmMod, Xtest)
+print(RMSE(preds[!is.na(ytest)], ytest[!is.na(ytest)]))
+print(cor.test(preds[!is.na(ytest)], ytest[!is.na(ytest)]))
+```
+
+```{r}
+PI = bootstrap(Xtrain, ytrain, "gaussian")
+write.csv(PI, "~/Desktop/GaudilliereLab/03 - COVID Kari/bootstrap_PI.csv")
+```
+
+
+PROTEOMICS
+```{r message=FALSE, warning=TRUE}
+### Features
+MyData = read_xlsx("~/Desktop/GaudilliereLab/03 - COVID Kari/20201029_Gaudilliere_NPX_2020-07-20_.xlsx")
+Samples = read_xlsx("~/Desktop/GaudilliereLab/03 - COVID Kari/20201029_Sample Manifest_corrected.xlsx")
+data <- MyData %>% dplyr::mutate(ID = SampleID) %>% dplyr::select(ID ,UniProt, Assay, NPX)  %>%
+  dcast(ID~Assay,fun.aggregate = mean)
+data = data[-c(54),]
+y = Samples$`Additional information`[1:88] != "Control"
+y_ = Samples$`Additional information`[1:88]
+y__ = as.numeric(as.factor(y_))
+data= data[,]
+wil_p = function(x){
+  c_ = wilcox.test(x~y, paired = F)
+  return(c_$p.value)
+}
+cor_p = function(x){
+  c_ = cor.test(x,y__, method = "spearman")
+  return(c_$p.value)
+}
+est_p = function(x){
+  c_ = cor(x,y__, method = "spearman")
+  return(c_)
+}
+FC = function(x){
+  c_ = mean(x[y == TRUE]) - mean(x[y == FALSE])
+  return(c_)
+}
+pvals = apply(data[,2:length(colnames(data))], 2, cor_p)
+FCs = apply(data[,2:length(colnames(data))], 2, FC)
+estimate = apply(data[,2:length(colnames(data))], 2, est_p)
+FDR =  p.adjust(pvals, method = "BH")
+df.results = data.frame(features = colnames(data)[2:length(colnames(data))], pvals, FDR, estimate)
+boot.Prot = read.csv("~/Desktop/GaudilliereLab/03 - COVID Kari/bootstrap_Prot.csv")
+df_net = merge(df.results, boot.Prot %>% rename(features = genes), all.x = T)
+df_net$count_g[is.na(df_net$count_g)] = 0
+```
+
+```{r}
+data = data[1:68,]
+data$WeeksTot = as.numeric(as.character(labels_LTI$`WEEKS TOTAL (max. weeks)`))
+
+```
+```{r}
+data$y_ =as.factor(y_)[1:68]
+p = ggplot(data, aes(y = PLAT, x = WeeksTot, col = y_) )+geom_point()+geom_smooth(method = "lm", se = F)+theme_classic()
+```
+
+
+```{r}
+cohort = read_xlsx("~/Desktop/GaudilliereLab/03 - COVID Kari/Olink_CyTOFcohort.xlsx")
+
+filter_cohort = function(name){
+  if(sum(cohort$`Specimen/ID` == name) == 0){
+    return(F)
+  }
+  return(cohort$CyTOFcohort[which(cohort$`Specimen/ID` == name)] == "2" | cohort$CyTOFcohort[which(cohort$`Specimen/ID` == name)] == "3")
+}
+
+ybis = cohort$Duration_symptoms
+
+l_cohort = unlist(sapply(data$ID, filter_cohort))
+
+training = data[l_cohort,-c(1)]
+test = data[!l_cohort, -c(1)]
+ytest = y__[!l_cohort]
+ytrain = y__[l_cohort]
+```
+
+```{r}
+pred_outcomes$ID = labels1$sampleID[!fil]
+df_prot = data.frame(ID = data$SampleID[l_cohort], Prot = PredOutcomes(mod.Prot))
+df = merge(pred_outcomes, df_prot, all.x = T, all.y =F, by = c("ID"))
+```
+
+Stack generalization
+
+
+
+```{r}
+library(caret)
+library(glmnet)
+ytrain = as.numeric(as.factor(ytrain))
+glmGrid <-  expand.grid(alpha = c(1), 
+                          lambda = seq(0,1,0.001))
+
+mod.Freq = train(y = ytrain[!is.na(ytrain)], x = X.Freq.train[!is.na(ytrain),] , method = "glmnet", family = "gaussian",
+                  trControl = trainControl(method="LOOCV"), 
+                  tuneGrid = glmGrid, preProcess = c("medianImpute","nzv"))
+mod.Unstim = train(y = ytrain[!is.na(ytrain)], x = X.Unstim.train[!is.na(ytrain),] , method = "glmnet", family = "gaussian",
+                  trControl = trainControl(method="LOOCV"), 
+                  tuneGrid = glmGrid, preProcess = c("medianImpute","nzv"))
+filLPS = rowSums(is.na(X.LPS.train)) != ncol(X.LPS.train)
+mod.LPS = train(y = ytrain[filLPS], x = X.LPS.train[filLPS,], method = "glmnet", family = "gaussian",
+                  trControl = trainControl(method="LOOCV"), 
+                  tuneGrid = glmGrid, preProcess = c("medianImpute","nzv"))
+filIFN = rowSums(is.na(X.IFN.train)) != ncol(X.IFN.train)
+mod.IFN = train(y = ytrain[filIFN], x = X.IFN.train[filIFN,] , method = "glmnet", family = "gaussian",
+                  trControl = trainControl(method="LOOCV"), 
+                  tuneGrid = glmGrid, preProcess = c("medianImpute","nzv"))
+filPI = rowSums(is.na(X.PI.train)) != ncol(X.PI.train)
+mod.PI = train(y = ytrain[filPI], x = X.PI.train[filPI,] , method = "glmnet", family = "gaussian",
+                  trControl = trainControl(method="LOOCV"), 
+                  tuneGrid = glmGrid, preProcess = c("medianImpute","nzv"))
+mod.Prot = train(y = ytrain, x = training , method = "glmnet", family = "gaussian",
+                  trControl = trainControl(method="LOOCV"), 
+                  tuneGrid = glmGrid, preProcess = c("medianImpute","nzv"))
+```
+
+
+
+```{r}
+PredOutcomes = function(glmMod){
+    pred_outcomes = glmMod$pred
+    pred_outcomes = pred_outcomes[pred_outcomes$alpha==glmMod$bestTune$alpha&
+                                pred_outcomes$lambda==glmMod$bestTune$lambda,]
+    return(pred_outcomes$pred)
+}
+```
+
+```{r}
+pred_outcomes = c()
+pred_outcomes$Freq = PredOutcomes(mod.Freq)
+pred_outcomes$Unstim = PredOutcomes(mod.Unstim)
+pred_outcomes$LPS = ifelse(filLPS, PredOutcomes(mod.LPS), NA)
+pred_outcomes$IFN = ifelse(filIFN,PredOutcomes(mod.IFN), NA)
+pred_outcomes$PI = ifelse(filPI,PredOutcomes(mod.PI), NA)
+pred_outcomes = data.frame(pred_outcomes)
+```
+```{r}
+pred_outcomes  = t[-c(1)]
+prepro = preProcess(pred_outcomes, method = c("medianImpute"))
+pred_outcomes = predict(mod.Prot, pred_outcomes)
+```
+```{r}
+coeffs = c()
+library(colf)
+pred_outcomes = df[-c(1)]
+pred_outcomes[is.na(pred_outcomes)] = 2.5
+prepro = preProcess(pred_outcomes, method = c("medianImpute"))
+pred_outcomes = predict(prepro, pred_outcomes)
+pred_outcomes$y = as.numeric(as.factor(labels1$group[!fil]))
+#fil_training_na = rowSums(is.na(df[-c(1)])) <=3
+#pred_outcomes = pred_outcomes[fil_training_na,]
+preds = c()
+for (i in 1:73){
+mod_fin = colf_nlxb(y ~ ., data = pred_outcomes[-c(i),], lower = c(-Inf,0,0,0,0,0,0), )
+coeffs = rbind(coeffs, coef(mod_fin))
+preds = append(preds, predict(mod_fin, pred_outcomes[c(i),]))}
+coeffs_fin = apply(coeffs, 2, median)
+cor.test(preds, pred_outcomes$y)
+cor.test(preds[!is.na(df$Prot)], pred_outcomes$y[!is.na(df$Prot)])
+
+df_training_predictions = df
+df_training_predictions$preds_final = preds
+```
+```{r}
+mat_col <- data.frame(group =as.numeric(as.factor(labels1$group[!fil])))
+rownames(mat_col) <- df$ID
+mat = as.matrix(t(df[-c(1)]))
+colnames(mat) = df$ID
+# List with colors for each annotation.
+mat_colors <- list(group = brewer.pal(4, "Set1"))
+pheatmap(
+  mat               = mat,
+  col               = rev(heat.colors(256)),
+  annotation_col    = mat_col
+  )
+
+```
+```{r}
+mat_col <- data.frame(group = as.numeric(as.factor(ytest)))
+rownames(mat_col) <- test_outcomes$ID
+mat = as.matrix(t(test_outcomes[-c(1)]))
+colnames(mat) = test_outcomes$ID
+# List with colors for each annotation.
+mat_colors <- list(group = brewer.pal(4, "Set1"))
+pheatmap(
+  mat               = mat,
+  col               = rev(heat.colors(256)),
+  annotation_col    = mat_col
+  )
+
+```
+
+```{r}
+predsLPS = predict(mod.LPS,X.LPS.test)
+predsUnstim = predict(mod.Unstim, X.Unstim.test)
+predsPI = predict(mod.PI, X.PI.test)
+predsFreq = predict(mod.Freq, X.Freq.test)
+predsIFN = predict(mod.IFN, X.IFN.test)
+predsProt = predict(mod.Prot, test)
+```
+
+
+```{r}
+filLPStest = rowSums(is.na(X.LPS.test)) != ncol(X.LPS.test)
+filIFNtest = rowSums(is.na(X.IFN.test)) != ncol(X.IFN.test)
+filPItest = rowSums(is.na(X.PI.test)) != ncol(X.PI.test)
+
+test_outcomes = data.frame(predsFreq, predsPI = ifelse(filPItest, predsPI, NA), predsLPS = ifelse(filLPStest, predsLPS, NA), predsUnstim, predsIFN = ifelse(filIFNtest, predsIFN, NA))
+test_outcomes$ID = labels1$sampleID[fil]
+df_prot = data.frame(ID = data$SampleID[!l_cohort], Prot = predsProt)
+#test_outcomes$y = ytest
+test_outcomes = merge(test_outcomes, df_prot, all.x = T, all.y = F, by = c("ID"))
+#test_outcomes[is.na(test_outcomes)] = 2.5
+test_outcomes$y = ytest
+```
+
+
+```{r}
+preds_final = -1.301302055 + ifelse(is.na(0.120842185*test_outcomes$predsFreq), 0, 0.120842185*test_outcomes$predsFreq) + ifelse(is.na(0.427819498*test_outcomes$predsUnstim), 0,0.427819498*test_outcomes$predsUnstim)  + ifelse(is.na(0.007956573*test_outcomes$predsIFN), 0, 0.007956573*test_outcomes$predsIFN) + ifelse(is.na(0.182084202*test_outcomes$predsPI), 0,0.182084202*test_outcomes$predsPI)  + ifelse(is.na(0.732571762*test_outcomes$Prot), 0, 0.732571762*test_outcomes$Prot)
+fil_testing_na = rowSums(is.na(test_outcomes[-c(1)])) <=3
+cor.test(preds_final, ytest)
+```
+```{r}
+cor.test(preds_final[!is.na(test_outcomes$Prot)],ytest[!is.na(test_outcomes$Prot)])
+boxplot(preds_final[!is.na(test_outcomes$Prot)]~ytest[!is.na(test_outcomes$Prot)])
+```
+
+Labels - 
+```{r}
+library(readxl)
+labels_LTI = read_xlsx("~/PROT _ LTI Patient Symptom Categories by ID 09_16_2020_DF.xlsx")
+```
+
+```{r}
+SAM_Covid = t(data[-c(1)])
+write.csv(SAM_Covid, "SAM_COVID_prot_KARI.csv")
+```
+
+
+Correlation network
+```{r}
+library(corrr)
+res.cor <- t(data [, c(-1)]) %>%  # (1)
+  t() %>% correlate() %>%            # (2)
+  shave(upper = TRUE) %>%            # (3)
+  stretch(na.rm = TRUE) %>%          # (4)
+  filter(r >= 0.5)                 # (5)
+cor.graph <- as_tbl_graph(res.cor, directed = FALSE)
+
+cor.graph = cor.graph %>% 
+  activate(edges) %>% 
+  arrange(desc(r))
+
+# Car groups info
+prot.group <- data_frame(
+  name = colnames(data[-c(1)]),
+  pval = -log10(pvals)
+)
+# Modify the nodes data
+cor.graph <- cor.graph %>%
+  activate(nodes) %>%
+  left_join(prot.group, by = "name") %>%
+  rename(label = name)
+```
+```{r}
+set.seed(1)
+ggraph(cor.graph) + 
+  geom_edge_link(aes(width = r), alpha = 0.2) + 
+  scale_edge_width(range = c(0.2, 1)) +
+  geom_node_point(aes(size = pval), size = 2) 
+
+  #geom_node_text(aes(label = ""), size = 3, repel = TRUE) +
+  theme_graph()
+```
+
+```{r}
+library(RColorBrewer)
+
+df_training_predictions = read.csv("~/Desktop/GaudilliereLab/03 - COVID Kari/training_preds.csv")
+roc.multi = multiclass.roc(predictor = as.numeric(df_training_predictions$predsFinal), response = as.numeric(df_training_predictions$labels), partial.auc = c(0,1))
+rs <- roc.multi[['rocs']]
+mat_colors <- brewer.pal(6, "Set1")
+plot.roc(rs[[1]], col = mat_colors[1])
+sapply(2:length(rs),function(i) lines.roc(rs[[i]],col=mat_colors[i]))
+legend("bottomright", 
+       legend = c("1vs2", "1vs3", "1vs4", "2vs3", "2vs4", "3vs4"), 
+       fill = mat_colors
+       )
+roc.multi
+
+```
+
+```{r}
+roc.multi = multiclass.roc(predictor = as.numeric(test_outcomes$predsFinal), as.numeric(test_outcomes$labels))
+rs <- roc.multi[['rocs']]
+mat_colors <- brewer.pal(6, "Set1")
+plot.roc(rs[[1]], col = mat_colors[1])
+sapply(2:length(rs),function(i) lines.roc(rs[[i]],col=mat_colors[i]))
+legend("bottomright", 
+       legend = c("1vs2", "1vs3", "1vs4", "2vs3", "2vs4", "3vs4"), 
+       fill = mat_colors
+       )
+```
+
+```{r}
+plot.roc(rs[[4]], col = mat_colors[4])
+sapply(5:length(rs),function(i) lines.roc(rs[[i]],col=mat_colors[i]))
+legend("bottomright", 
+       legend = c("2vs3", "2vs4", "3vs4"), 
+       fill = mat_colors[4:6]
+       )
+```
+```{r}
+demogr = read_xlsx("~/Desktop/GaudilliereLab/03 - COVID Kari/COVID_DemographicsSymptoms_14Dec (1).xlsx")
+confounder = merge(df_training_predictions, demogr %>% rename(ID = sampleID), by = c("ID"))#%>% mutate(Obesity = as.numeric(Obesity))
+summary(glm(labels~preds_final+Days_since_symptom_onset+Age+Sex+Obesity,data = confounder))
+
+```
+
+```{r}
+viral = merge(X.Freq %>% mutate(ID = labels1$sampleID), demogr %>% mutate(Ct_viral = as.numeric(Ct_viral)) %>% select(sampleID, Ct_viral) %>% rename(ID = sampleID), by = c("ID")) %>% select(-one_of("ID"))
+```
+
+```{r}
+pospart = function(x){
+  return(ifelse(x<0, 0, x))
+}
+prot_influence = merge(data, demogr %>% rename(ID = sampleID), by = c("ID")) 
+prot_influence = prot_influence %>% 
+  mutate(WEEKS_Breathing_symptoms_ = pospart(WEEKS_Breathing_symptoms - (Days_since_symptom_onset/7.0)), 
+           WEEKS_GI_symptoms_ = pospart(WEEKS_GI_symptoms - (Days_since_symptom_onset/7.0)), 
+           WEEKS_RashJoint_symptoms_ = pospart(as.numeric(WEEKS_RashJoint_symptoms) - (Days_since_symptom_onset/7.0)), 
+           WEEKS_Neuro_symptoms_ = pospart(as.numeric(WEEKS_Neuro_symptoms) - (Days_since_symptom_onset/7.0)),
+           WEEKS_General_symptoms_ = pospart(as.numeric(WEEKS_General_symptoms) - (Days_since_symptom_onset/7.0)))
+```
+
+```{r}
+fit = lm(MERTK ~WEEKS_Breathing_symptoms_+WEEKS_GI_symptoms_+WEEKS_RashJoint_symptoms_+WEEKS_Neuro_symptoms_+WEEKS_General_symptoms_, data = prot_influence)
+summary(fit)
+```
+
